@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 use nannou::prelude::*;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::thread;
 use std::time::{Duration, Instant};
 use nannou_egui::{self, egui, Egui};
@@ -58,7 +58,7 @@ enum FractalType {
 }
 
 impl Debug for FractalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             FractalType::Mandelbrot => write!(f, "Mandelbrot"),
             FractalType::BurningShip => write!(f, "Burning Ship"),
