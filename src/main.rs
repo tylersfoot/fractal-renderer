@@ -1,3 +1,4 @@
+use nannou_egui::egui::RichText;
 use wgpu::util::DeviceExt;
 use nannou::prelude::*;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
@@ -28,11 +29,10 @@ struct Compute {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
+    julia_k: [f32; 2],
     width: u32,
     height: u32,
     fractal_type: u32,
-    _padding: u32,
-    julia_k: [f32; 2],
     iterations: u32,
     threshold: f32,
     real_min: f32,
@@ -44,7 +44,10 @@ struct Uniforms {
     color_palette: u32,
     color_fill: u32,
     palette_iterations: u32, // max iterations for palette gradient
+    link_iterations: u32,
     smooth_coloring: u32, // 0 = off, 1 = on
+    invert_palette: u32, // 0 = normal, 1 = inverted
+    _padding: u32,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -106,14 +109,22 @@ fn model(app: &App) -> Model {
     // default settings
     let zoom = 1.0;
 
+    // default parameters
     let params = Uniforms {
         width,
         height,
         fractal_type: 0,
-        _padding: 0,
         julia_k: [0.0, 0.6],
         iterations: 200,
         threshold: 2.0,
+        color_palette: 0,
+        color_fill: 0x000000, // black
+        palette_iterations: 200,
+        link_iterations: 1,
+        smooth_coloring: 1,
+        invert_palette: 0,
+        _padding: 0,
+
         // these will be overwritten on the first frame
         real_min: 0.0,
         real_max: 0.0,
@@ -121,11 +132,6 @@ fn model(app: &App) -> Model {
         imaginary_max: 0.0,
         real_step: 0.0,
         imaginary_step: 0.0,
-        color_palette: 0,
-        color_fill: 0x000000, // black
-        palette_iterations: 200,
-        smooth_coloring: 1, // on by default
-        
     };
 
     // ---- create buffers ----
@@ -284,35 +290,48 @@ fn update(app: &App, model: &mut Model, update: Update) {
         }
 
         if selected_fractal_type == FractalType::Julia {
-            ui.label("Julia Constant:");
-            let mut julia_k = [params.julia_k[0], params.julia_k[1]];
-            // fine control sliders from -2 to 2
-            view_changed |= ui.add(egui::Slider::new(&mut julia_k[0], -2.0..=2.0).text("Re")).changed();
-            view_changed |= ui.add(egui::Slider::new(&mut julia_k[1], -2.0..=2.0).text("Im")).changed();
-            if view_changed {
-                params.julia_k[0] = julia_k[0];
-                params.julia_k[1] = julia_k[1];
-            }
+            // ui.label("Julia Constant:");
+            // let mut julia_k = [params.julia_k[0], params.julia_k[1]];
+            // view_changed |= ui.add(egui::DragValue::new(&mut julia_k[0]).speed(0.001).prefix("Re: ")).changed();
+            // view_changed |= ui.add(egui::DragValue::new(&mut julia_k[1]).speed(0.001).prefix("Im: ")).changed();
+            // if view_changed {
+            //     params.julia_k[0] = julia_k[0];
+            //     params.julia_k[1] = julia_k[1];
+            // }
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                ui.label(RichText::new("c =").size(14.0));
+                view_changed |= ui.add(egui::DragValue::new(&mut params.julia_k[0]).speed(0.001)).changed();
+                ui.label(RichText::new("+").size(14.0));
+                view_changed |= ui.add(egui::DragValue::new(&mut params.julia_k[1]).speed(0.001)).changed();
+                ui.label(RichText::new("i").size(14.0));
+            });
         }
 
         ui.separator();
 
         ui.label("Iterations:");
-        view_changed |= ui.add(egui::Slider::new(&mut params.iterations, 1..=2000)).changed();
+        if ui.add(egui::Slider::new(&mut params.iterations, 1..=2000).drag_value_speed(1.0)).changed() {
+            if params.link_iterations == 1 {
+                params.palette_iterations = params.iterations;
+            }
+            view_changed = true;
+        }
 
         ui.label("Threshold:");
-        view_changed |= ui.add(egui::Slider::new(&mut params.threshold, 0.5..=10.0)).changed();
+        view_changed |= ui.add(egui::Slider::new(&mut params.threshold, 0.5..=10.0).drag_value_speed(0.001)).changed();
 
         ui.separator();
 
-        ui.label("Color Palette:");
+        // ui.label("Color Palette:");
         let mut selected_color_palette = match params.color_palette {
             0 => ColorPalette::Sinebow,
             1 => ColorPalette::Rainbow,
             _ => ColorPalette::Sinebow, // default/fallback
         };
         let before_color_palette = selected_color_palette;
-        egui::ComboBox::from_id_source("color_palette_combo")
+        egui::ComboBox::from_label("Color Palette")
             .selected_text(format!("{selected_color_palette:?}"))
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut selected_color_palette, ColorPalette::Sinebow, "Sinebow");
@@ -328,31 +347,49 @@ fn update(app: &App, model: &mut Model, update: Update) {
             view_changed = true;
         }
 
-        ui.label("Smooth Coloring:");
         let mut smooth_coloring = params.smooth_coloring == 1;
-        if ui.checkbox(&mut smooth_coloring, "").changed() {
+        if ui.checkbox(&mut smooth_coloring, "Smooth Coloring").changed() {
             params.smooth_coloring = if smooth_coloring { 1 } else { 0 };
             view_changed = true;
         }
 
-        ui.label("Palette Iterations:");
-        view_changed |= ui.add(egui::Slider::new(&mut params.palette_iterations, 0..=2000)).changed();
+        let mut invert_palette = params.invert_palette == 1;
+        if ui.checkbox(&mut invert_palette, "Invert Palette").changed() {
+            params.invert_palette = if invert_palette { 1 } else { 0 };
+            view_changed = true;
+        }
+
+        let mut link_iterations = params.link_iterations == 1;
+        if ui.checkbox(&mut link_iterations, "Link Iterations").changed() {
+            if link_iterations {
+                params.link_iterations = 1;
+                params.palette_iterations = params.iterations;
+            } else {
+                params.link_iterations = 0;
+            }
+            view_changed = true;
+        }
+        
+        if !link_iterations {
+            ui.label("Palette Iterations:");
+            view_changed |= ui.add(egui::Slider::new(&mut params.palette_iterations, 0..=2000).drag_value_speed(1.0)).changed();
+        }
 
         ui.label("Fill Color:");
         let mut fill_color = to_rgb_f32(params.color_fill);
-
         if egui::color_picker::color_edit_button_rgb(ui, &mut fill_color).changed() {
             params.color_fill = to_rgb_u32(fill_color);
             view_changed = true;
         }
 
-        let clicked = ui.button("Reset Settings").clicked();
-
-        if clicked {
+        if ui.button("Reset Settings").clicked() {
             params.iterations = 200;
             params.threshold = 2.0;
             params.palette_iterations = 200;
             params.color_fill = 0x000000;
+            params.color_palette = 0;
+            params.smooth_coloring = 1;
+            params.invert_palette = 0;
             model.center_real = -0.5;
             model.center_imaginary = 0.0;
             model.zoom = 1.0;

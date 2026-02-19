@@ -1,12 +1,13 @@
 const PI: f32 = 3.14159265358979323846264338327950288;
-const PI_FRAC_3: f32 = 1.04719755119659774615421446109316763;
+const PI_OVER_3: f32 = 1.04719755119659774615421446109316763;
+const TWO_PI_OVER_3: f32 = 2.09439510239319549230842892218633526;
+const PI_OVER_180: f32 = 0.017453292519943295769236907684886127;
 
 struct Params {
+    julia_k: vec2<f32>, // only used for Julia set
     width: u32,
     height: u32,
     fractal_type: u32,
-    _padding: u32,
-    julia_k: vec2<f32>, // only used for Julia set
     iterations: u32,
     threshold: f32,
     real_min: f32,
@@ -19,7 +20,10 @@ struct Params {
     color_palette: u32,
     color_fill: u32, // packed RGB as 0xRRGGBB
     palette_iterations: u32,
+    link_iterations: u32,
     smooth_coloring: u32,
+    invert_palette: u32,
+    _padding: u32,
 }
 
 // output texture (write-only)
@@ -126,8 +130,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // pixel is outside the set, color will be interpolated
-    // normalize steps to [0, 1] range
-    let normalized_steps = steps / f32(params.palette_iterations);
+    // normalize steps to [0, 1] range, cyclical
+    var normalized_steps = (steps / f32(params.palette_iterations)) % 1.0;
+
+    // invert palette option
+    if (params.invert_palette == 1u) {
+        normalized_steps = 1.0 - normalized_steps;
+    }
+
     let color = gradient(normalized_steps, params.color_palette);
     let coordinates = vec2<i32>(i32(x), i32(y));
     textureStore(output_texture, coordinates, vec4<f32>(color, 1.0));
@@ -136,41 +146,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn gradient(steps: f32, palette: u32) -> vec3<f32> {
     switch (palette) {
         case 0u: {
-            // sinebow cyclical gradient
+            // sinebow (cyclical)
             // https://docs.rs/colorous/latest/src/colorous/cyclical.rs.html#37
             // https://observablehq.com/@mbostock/sinebow
 
-            let t = 0.5 - steps;
-            let offsets = vec3<f32>(0.0, 1.0 / 3.0, 2.0 / 3.0);
-            let sines = sin(PI * (t + offsets));
-            return sines * sines;
+            let offsets = vec3<f32>(0.0, PI_OVER_3, TWO_PI_OVER_3);
+            let c = cos((steps * PI) - offsets);
+            return c * c;
         }
         case 1u: {
+            // less-angry rainbow (cyclical)
             let ts = abs(steps - 0.5);
             let h = 360.0 * steps - 100.0;
             let s = 1.5 - 1.5 * ts;
             let l = 0.8 - 0.9 * ts;
 
-            return cubehelix_to_rgb(h, s, l);
+            return cubehelix_to_rgb(vec3<f32>(h, s, l));
         }
         default: {
+            // fallback to black
             return vec3<f32>(0.0, 0.0, 0.0);
         }
     }
 }
 
-
-fn cubehelix_to_rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
-    let angle = radians(h);
-    let amp = s * l * (1.0 - l);
-    
-    let cos_h = cos(angle);
-    let sin_h = sin(angle);
-
-    let r = l + amp * (-0.14861 * cos_h + 1.78277 * sin_h);
-    let g = l + amp * (-0.29227 * cos_h - 0.90649 * sin_h);
-    let b = l + amp * (1.97294 * cos_h);
-
-    // Clamp results to 0.0 - 1.0 range
-    return saturate(vec3<f32>(r, g, b)); 
+fn cubehelix_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
+    // https://github.com/dtolnay/colorous/blob/master/src/cubehelix.rs
+    let h = (hsl.x + 120.0) * PI_OVER_180;
+    let l = hsl.z;
+    let a = hsl.y * l * (1.0 - l);
+    let cosh = cos(h);
+    let sinh = sin(h);
+    let r = (l - a * (0.14861 * cosh - 1.78277 * sinh));
+    let g = (l - a * (0.29227 * cosh + 0.90649 * sinh));
+    let b = (l + a * (1.97294 * cosh));
+    return clamp(vec3<f32>(r, g, b), vec3<f32>(0.0), vec3<f32>(1.0));
 }
